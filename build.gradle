@@ -1,0 +1,38 @@
+import org.gradle.api.tasks.Exec
+
+def dockerImage = 'ai-quizlet-backend'
+def dockerContainer = 'ai-quizlet-backend'
+
+tasks.register('dockerBuildBackend', Exec) {
+    group = 'docker'
+    description = 'Builds the backend Docker image.'
+    dependsOn ':backend:bootJar'
+    workingDir project(':backend').projectDir
+    commandLine 'docker', 'build', '-t', dockerImage, '.'
+}
+
+tasks.register('dockerRunBackend', Exec) {
+    group = 'docker'
+    description = 'Runs the backend Docker container (stopping/removing any previous instance first).'
+    dependsOn 'dockerBuildBackend'
+    doFirst {
+        exec {
+            ignoreExitValue = true
+            commandLine 'docker', 'rm', '-f', dockerContainer
+        }
+    }
+    commandLine 'docker', 'run', '-d', '--name', dockerContainer, '-p', '8080:8080', dockerImage
+}
+
+tasks.register('dockerStopBackend', Exec) {
+    group = 'docker'
+    description = 'Stops and removes the backend Docker container.'
+    ignoreExitValue = true
+    commandLine 'docker', 'rm', '-f', dockerContainer
+}
+
+tasks.register('deployBackend') {
+    group = 'docker'
+    description = 'Builds and deploys the backend to a local Docker container.'
+    dependsOn 'dockerRunBackend'
+}
