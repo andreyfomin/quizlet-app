@@ -1,14 +1,21 @@
 import org.gradle.api.tasks.Exec
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
 
-def dockerImage = 'ai-quizlet-backend'
-def dockerContainer = 'ai-quizlet-backend'
+def backendImage = 'ai-quizlet-backend'
+def backendContainer = 'ai-quizlet-backend'
+def slackbotImage = 'ai-quizlet-slackbot'
+def slackbotContainer = 'ai-quizlet-slackbot'
 
 tasks.register('dockerBuildBackend', Exec) {
     group = 'docker'
     description = 'Builds the backend Docker image.'
     dependsOn ':backend:bootJar'
     workingDir project(':backend').projectDir
-    commandLine 'docker', 'build', '-t', dockerImage, '.'
+    commandLine 'docker', 'build', '-t', backendImage, '.'
 }
 
 tasks.register('dockerRunBackend', Exec) {
@@ -18,21 +25,216 @@ tasks.register('dockerRunBackend', Exec) {
     doFirst {
         exec {
             ignoreExitValue = true
-            commandLine 'docker', 'rm', '-f', dockerContainer
+            commandLine 'docker', 'rm', '-f', backendContainer
         }
     }
-    commandLine 'docker', 'run', '-d', '--name', dockerContainer, '-p', '8080:8080', dockerImage
+    commandLine 'docker', 'run', '-d', '--name', backendContainer, '-p', '8080:8080', backendImage
 }
 
 tasks.register('dockerStopBackend', Exec) {
     group = 'docker'
     description = 'Stops and removes the backend Docker container.'
     ignoreExitValue = true
-    commandLine 'docker', 'rm', '-f', dockerContainer
+    commandLine 'docker', 'rm', '-f', backendContainer
 }
 
 tasks.register('deployBackend') {
     group = 'docker'
     description = 'Builds and deploys the backend to a local Docker container.'
     dependsOn 'dockerRunBackend'
+}
+
+tasks.register('dockerBuildSlackbot', Exec) {
+    group = 'docker'
+    description = 'Builds the slackbot Docker image.'
+    dependsOn ':slackbot:bootJar'
+    workingDir project(':slackbot').projectDir
+    commandLine 'docker', 'build', '-t', slackbotImage, '.'
+}
+
+tasks.register('dockerRunSlackbot', Exec) {
+    group = 'docker'
+    description = 'Runs the slackbot Docker container (stopping/removing any previous instance first).'
+    dependsOn 'dockerBuildSlackbot'
+    doFirst {
+        exec {
+            ignoreExitValue = true
+            commandLine 'docker', 'rm', '-f', slackbotContainer
+        }
+    }
+    commandLine 'docker', 'run', '-d', '--name', slackbotContainer, '-p', '8081:8081', slackbotImage
+}
+
+tasks.register('dockerStopSlackbot', Exec) {
+    group = 'docker'
+    description = 'Stops and removes the slackbot Docker container.'
+    ignoreExitValue = true
+    commandLine 'docker', 'rm', '-f', slackbotContainer
+}
+
+tasks.register('deploySlackbot') {
+    group = 'docker'
+    description = 'Builds and deploys the slackbot to a local Docker container.'
+    dependsOn 'dockerRunSlackbot'
+}
+
+tasks.register('composeUp', Exec) {
+    group = 'docker'
+    description = 'Builds and starts the full stack (postgres, backend, slackbot) via docker compose.'
+    dependsOn ':backend:bootJar', ':slackbot:bootJar'
+    commandLine 'docker', 'compose', 'up', '--build', '-d'
+}
+
+tasks.register('composePs', Exec) {
+    group = 'docker'
+    description = 'Shows the status of the docker compose stack.'
+    commandLine 'docker', 'compose', 'ps'
+}
+
+// --- Slack dev-loop automation ---------------------------------------------
+//
+// Solves "ngrok assigns a new random URL every restart, so I have to manually
+// re-paste it into the Slack app config every time." ngrokStart resolves the
+// current tunnel URL (starting one if needed); slackManifestSync pushes that
+// URL into the Slack app's Request URLs via the Apps Manifest API. Neither
+// task creates the Slack app itself — that's still the one-time manual step
+// in slackbot/README.md ("Create the Slack app").
+
+def envFile = file('.env')
+
+def readEnvValue = { String key ->
+    if (!envFile.exists()) {
+        return null
+    }
+    def line = envFile.readLines().find { it.startsWith("${key}=") }
+    return line ? line.substring(key.length() + 1).trim() : null
+}
+
+def writeEnvValue = { String key, String value ->
+    def lines = envFile.exists() ? envFile.readLines() : []
+    boolean found = false
+    def newLines = lines.collect { line ->
+        if (line.startsWith("${key}=")) {
+            found = true
+            return "${key}=${value}"
+        }
+        return line
+    }
+    if (!found) {
+        newLines << "${key}=${value}"
+    }
+    envFile.text = newLines.join(System.lineSeparator()) + System.lineSeparator()
+}
+
+tasks.register('ngrokStart') {
+    group = 'slack'
+    description = 'Starts ngrok pointed at the slackbot (port 8081) if not already running; prints its public URL.'
+    doLast {
+        def http = HttpClient.newHttpClient()
+        def tunnelsUri = URI.create('http://127.0.0.1:4040/api/tunnels')
+
+        def findTunnelUrl = {
+            try {
+                def resp = http.send(HttpRequest.newBuilder(tunnelsUri).GET().build(),
+                        HttpResponse.BodyHandlers.ofString())
+                if (resp.statusCode() != 200) {
+                    return null
+                }
+                def json = new JsonSlurper().parseText(resp.body())
+                def tunnel = json.tunnels?.find { it.proto == 'https' && it.config?.addr?.toString()?.contains('8081') }
+                return tunnel?.public_url
+            } catch (IOException ignored) {
+                return null
+            }
+        }
+
+        if (findTunnelUrl() == null) {
+            logger.lifecycle('Starting ngrok (http 8081)...')
+            def logFile = file('build/ngrok.log')
+            logFile.parentFile.mkdirs()
+            new ProcessBuilder('ngrok', 'http', '8081', '--log=stdout')
+                    .redirectOutput(logFile)
+                    .redirectErrorStream(true)
+                    .start()
+        } else {
+            logger.lifecycle('ngrok already running — reusing the existing tunnel.')
+        }
+
+        String publicUrl = null
+        for (int attempt = 0; attempt < 30 && publicUrl == null; attempt++) {
+            publicUrl = findTunnelUrl()
+            if (publicUrl == null) {
+                Thread.sleep(1000)
+            }
+        }
+        if (publicUrl == null) {
+            throw new GradleException('Timed out waiting for an ngrok tunnel on port 8081. Is the ngrok CLI ' +
+                    'installed and on PATH? Check build/ngrok.log for details.')
+        }
+
+        project.ext.ngrokPublicUrl = publicUrl
+        logger.lifecycle("ngrok public URL: ${publicUrl}")
+    }
+}
+
+tasks.register('slackManifestSync') {
+    group = 'slack'
+    description = "Points the Slack app's Request URLs at the current ngrok tunnel via apps.manifest.update."
+    dependsOn 'ngrokStart'
+    doLast {
+        String publicUrl = project.ext.ngrokPublicUrl
+        String appId = readEnvValue('SLACK_APP_ID')
+        String refreshToken = readEnvValue('SLACK_CONFIG_REFRESH_TOKEN')
+        if (!appId || !refreshToken) {
+            throw new GradleException('SLACK_APP_ID and/or SLACK_CONFIG_REFRESH_TOKEN are missing from .env. ' +
+                    'One-time setup: generate a config token pair at https://api.slack.com/apps ("Your App ' +
+                    'Configuration Tokens" section) and copy the App ID from Basic Information — see ' +
+                    'slackbot/README.md ("Keep the Slack app URL in sync automatically").')
+        }
+
+        def http = HttpClient.newHttpClient()
+
+        // 1. Rotate the config token — access tokens expire every 12h, and the refresh
+        //    token itself is single-use, so this must happen before every sync.
+        def rotateBody = "refresh_token=${URLEncoder.encode(refreshToken, 'UTF-8')}"
+        def rotateResp = http.send(
+                HttpRequest.newBuilder(URI.create('https://slack.com/api/tooling.tokens.rotate'))
+                        .header('Content-Type', 'application/x-www-form-urlencoded')
+                        .POST(HttpRequest.BodyPublishers.ofString(rotateBody))
+                        .build(),
+                HttpResponse.BodyHandlers.ofString())
+        def rotateJson = new JsonSlurper().parseText(rotateResp.body())
+        if (!rotateJson.ok) {
+            throw new GradleException("Failed to rotate Slack config token: ${rotateJson.error}. The refresh " +
+                    'token may have expired or already been used — generate a fresh pair at ' +
+                    'https://api.slack.com/apps and update SLACK_CONFIG_REFRESH_TOKEN in .env.')
+        }
+        // Save the rotated refresh token immediately — it's already invalidated the old
+        // one, so losing this value now would strand .env with a dead token either way.
+        writeEnvValue('SLACK_CONFIG_REFRESH_TOKEN', rotateJson.refresh_token)
+        logger.lifecycle('Rotated Slack config token (refresh token updated in .env).')
+
+        // 2. Build the manifest with the current tunnel URL substituted in.
+        def manifestJson = file('slackbot/slack-manifest.json').text.replace('__PUBLIC_URL__', publicUrl)
+
+        // 3. Push it. The access token must go in the Authorization header — Slack's
+        //    JSON-body content type does not read a "token" field for auth purposes
+        //    (that's a form-encoding-only convention), so a body-only token silently
+        //    reads as no auth at all ("not_authed", not "invalid_auth").
+        def updateBody = JsonOutput.toJson([app_id: appId, manifest: manifestJson])
+        def updateResp = http.send(
+                HttpRequest.newBuilder(URI.create('https://slack.com/api/apps.manifest.update'))
+                        .header('Content-Type', 'application/json; charset=utf-8')
+                        .header('Authorization', "Bearer ${rotateJson.token}")
+                        .POST(HttpRequest.BodyPublishers.ofString(updateBody))
+                        .build(),
+                HttpResponse.BodyHandlers.ofString())
+        def updateJson = new JsonSlurper().parseText(updateResp.body())
+        if (!updateJson.ok) {
+            def details = updateJson.errors ? updateJson.errors.collect { "${it.pointer}: ${it.message}" }.join('; ') : ''
+            throw new GradleException("apps.manifest.update failed: ${updateJson.error}. ${details}")
+        }
+
+        logger.lifecycle("Slack app Request URLs updated to ${publicUrl}/slack/events")
+    }
 }

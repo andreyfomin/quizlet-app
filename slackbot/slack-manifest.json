@@ -1,0 +1,35 @@
+{
+  "display_information": {
+    "name": "AI Quizlet",
+    "description": "Create and play AI-generated quizzes with your team"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "AI Quizlet",
+      "always_online": true
+    },
+    "slash_commands": [
+      {
+        "command": "/quiz",
+        "url": "__PUBLIC_URL__/slack/events",
+        "description": "Create and play AI-generated quizzes",
+        "usage_hint": "create <topic> | list | delete <id> | start <id> @user... | progress <sessionId> | help",
+        "should_escape": true
+      }
+    ]
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": ["commands", "chat:write", "im:write"]
+    }
+  },
+  "settings": {
+    "interactivity": {
+      "is_enabled": true,
+      "request_url": "__PUBLIC_URL__/slack/events"
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}

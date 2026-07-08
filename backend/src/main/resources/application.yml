@@ -1,6 +1,13 @@
 spring:
   application:
     name: ai-quizlet-backend
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:quizlet}
+    username: ${DB_USERNAME:quizlet}
+    password: ${DB_PASSWORD:quizlet}
+  jpa:
+    hibernate:
+      ddl-auto: update
 
 server:
   port: 8080
