@@ -60,6 +60,13 @@ public class QuizSessionService {
 
         List<Question> questions = session.getQuizlet().getQuestions();
         Question question = questions.get(participant.getCurrentQuestionIndex());
+
+        if (selectedOptionIndex < 0 || selectedOptionIndex >= question.getOptions().size()) {
+            throw new IllegalArgumentException("selectedOptionIndex " + selectedOptionIndex
+                    + " is out of range for question " + question.getId()
+                    + " (" + question.getOptions().size() + " options)");
+        }
+
         boolean correct = question.getCorrectOptionIndex() == selectedOptionIndex;
 
         Answer answer = new Answer(question, selectedOptionIndex, correct);
