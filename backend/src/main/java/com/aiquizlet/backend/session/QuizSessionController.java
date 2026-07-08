@@ -51,25 +51,23 @@ public class QuizSessionController {
     @GetMapping("/{sessionId}/progress/{slackUserId}")
     public ParticipantProgressResponse getUserProgress(@PathVariable Long sessionId, @PathVariable String slackUserId) {
         QuizSession session = sessionService.getSession(sessionId);
-        int totalQuestions = session.getQuizlet().getQuestions().size();
-        return session.getParticipants().stream()
-                .filter(p -> p.getSlackUserId().equals(slackUserId))
-                .findFirst()
-                .map(p -> ParticipantProgressResponse.from(p, totalQuestions))
-                .orElseThrow(() -> new NotFoundException(
-                        "Participant " + slackUserId + " not found in session " + sessionId));
+        Participant participant = findParticipant(session, slackUserId);
+        return ParticipantProgressResponse.from(participant, session.getQuizlet().getQuestions().size());
     }
 
     @GetMapping("/{sessionId}/review/{slackUserId}")
     public ParticipantReviewResponse getUserReview(@PathVariable Long sessionId, @PathVariable String slackUserId) {
         QuizSession session = sessionService.getSession(sessionId);
-        int totalQuestions = session.getQuizlet().getQuestions().size();
+        Participant participant = findParticipant(session, slackUserId);
+        return ParticipantReviewResponse.from(participant, session.getQuizlet().getQuestions().size());
+    }
+
+    private Participant findParticipant(QuizSession session, String slackUserId) {
         return session.getParticipants().stream()
                 .filter(p -> p.getSlackUserId().equals(slackUserId))
                 .findFirst()
-                .map(p -> ParticipantReviewResponse.from(p, totalQuestions))
                 .orElseThrow(() -> new NotFoundException(
-                        "Participant " + slackUserId + " not found in session " + sessionId));
+                        "Participant " + slackUserId + " not found in session " + session.getId()));
     }
 
     private SessionResponse toSessionResponse(QuizSession session) {

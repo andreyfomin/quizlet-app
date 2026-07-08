@@ -6,6 +6,19 @@
 > app and run this module, see [`README.md`](README.md) — this document is
 > the design rationale and stays accurate to the implementation below.
 
+## Table of Contents
+
+- [Responsibilities](#responsibilities)
+- [Interaction model](#interaction-model)
+- [Mapping Slack identities to backend participants](#mapping-slack-identities-to-backend-participants)
+- [Session and Slack context association](#session-and-slack-context-association)
+- [Sequence diagrams](#sequence-diagrams)
+  - [1. Create and start a quiz](#1-create-and-start-a-quiz)
+  - [2. Answering a question](#2-answering-a-question)
+  - [3. Checking progress](#3-checking-progress)
+- [Configuration](#configuration)
+- [Deliberate scope boundaries](#deliberate-scope-boundaries)
+
 ## Responsibilities
 
 The Slackbot is a thin client over the backend's REST API. It owns nothing
@@ -20,6 +33,8 @@ Slack's interaction model and the backend's HTTP API:
    one at a time, per user.
 4. Show progress (score / questions answered / completion) for everyone in a
    session.
+
+[↑ Back to top](#table-of-contents)
 
 ## Interaction model
 
@@ -76,6 +91,8 @@ result by POSTing to the command's `response_url` once it's ready
 synchronously via `ctx.ack()`. Answering a question is also fast enough to
 handle inline in `AnswerActionService`.
 
+[↑ Back to top](#table-of-contents)
+
 ## Mapping Slack identities to backend participants
 
 The backend's `Participant.slackUserId` is expected to be exactly Slack's
@@ -84,7 +101,9 @@ needed. The bot only has to resolve `@mentions` in the `/quiz start` command
 to their Slack user IDs (Slack does this resolution for it) and pass them
 straight through to `POST /api/sessions`.
 
-## Session ↔ Slack context association
+[↑ Back to top](#table-of-contents)
+
+## Session and Slack context association
 
 The backend has no notion of "channel" or "which Slack message this
 question was posted in" — it only knows `sessionId` / `slackUserId` (the
@@ -97,9 +116,11 @@ call: each option button's `value` is `"{sessionId}:{optionIndex}"`
 block action payload (`payload.getUser().getId()`) — both fully recoverable
 from the interaction itself, with nothing to persist bot-side.
 
+[↑ Back to top](#table-of-contents)
+
 ## Sequence diagrams
 
-### 1. Create + start a quiz
+### 1. Create and start a quiz
 
 ```mermaid
 sequenceDiagram
@@ -170,6 +191,8 @@ sequenceDiagram
     Slack-->>User: shows progress in channel
 ```
 
+[↑ Back to top](#table-of-contents)
+
 ## Configuration
 
 Full setup steps (including creating the Slack app and its manifest) are in
@@ -183,11 +206,13 @@ Full setup steps (including creating the Slack app and its manifest) are in
 
 Required bot scopes: `commands`, `chat:write`, `im:write`.
 
+[↑ Back to top](#table-of-contents)
+
 ## Deliberate scope boundaries
 
 - The bot does not generate or grade quizzes itself — every piece of quiz
   logic lives in the backend so it can be reused by other future clients.
-- The bot keeps no state of its own at all (see "Session ↔ Slack context
+- The bot keeps no state of its own at all (see "Session and Slack context
   association" above) — it's safe to restart or run multiple instances
   behind a load balancer without any session affinity.
 - No retry/idempotency handling for duplicate Slack retries (Slack retries
@@ -204,3 +229,5 @@ Required bot scopes: `commands`, `chat:write`, `im:write`.
   small piece of channel-scoped state described as optional in earlier
   drafts of this design; deliberately left out for now to keep the bot
   fully stateless.
+
+[↑ Back to top](#table-of-contents)

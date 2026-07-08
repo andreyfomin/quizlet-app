@@ -3,6 +3,20 @@
 > See also: [Slackbot Client Architecture](../slackbot/ARCHITECTURE.md) for
 > how the Slack client is intended to drive this API.
 
+## Table of Contents
+
+- [Overview](#overview)
+- [Tech stack](#tech-stack)
+- [Package layout](#package-layout)
+- [Data model](#data-model)
+- [AI generation flow (`ai` package)](#ai-generation-flow-ai-package)
+- [REST API](#rest-api)
+- [Sequence diagrams](#sequence-diagrams)
+  - [1. Creating a quizlet (AI generation)](#1-creating-a-quizlet-ai-generation)
+  - [2. Starting a session and answering questions](#2-starting-a-session-and-answering-questions)
+- [Configuration](#configuration)
+- [Deliberate simplifications (skeleton stage)](#deliberate-simplifications-skeleton-stage)
+
 ## Overview
 
 The backend is a Spring Boot REST service that lets a client (initially the
@@ -18,6 +32,8 @@ It is a plain layered Spring MVC application backed by Postgres via JPA —
 no queues, no async workers. Each HTTP request is handled synchronously,
 including the AI call made during quiz creation.
 
+[↑ Back to top](#table-of-contents)
+
 ## Tech stack
 
 | Concern          | Choice                                                         |
@@ -29,6 +45,8 @@ including the AI call made during quiz creation.
 | HTTP client to HF | Spring's built-in `RestClient` (no extra SDK dependency)        |
 | Build             | Gradle (multi-project root, this module is `:backend`)          |
 | Packaging/deploy  | `Dockerfile` + root `docker-compose.yml` (Postgres + backend)   |
+
+[↑ Back to top](#table-of-contents)
 
 ## Package layout
 
@@ -44,6 +62,8 @@ Each of `quiz` and `session` follows the same shape: `Entity` classes,
 a `Repository` (Spring Data JPA), package-private `*Dtos` records for
 request/response shapes, a `Service` holding the transactional logic, and a
 `Controller` exposing it over REST.
+
+[↑ Back to top](#table-of-contents)
 
 ## Data model
 
@@ -75,6 +95,8 @@ Progress tracking falls out of this model directly: a participant's
 `currentQuestionIndex` / `score` / `completed` fields **are** their progress —
 there's no separate aggregation step.
 
+[↑ Back to top](#table-of-contents)
+
 ## AI generation flow (`ai` package)
 
 `QuizGeneratorService` builds a single chat-completion request:
@@ -95,6 +117,8 @@ into persisted `Quizlet`/`Question` entities in one transaction.
 Failures talking to Hugging Face (bad token, network error, non-2xx) surface
 as Spring's `RestClientException` and are translated by `ApiExceptionHandler`
 into a `502 Bad Gateway` with a readable message, instead of a bare 500.
+
+[↑ Back to top](#table-of-contents)
 
 ## REST API
 
@@ -128,6 +152,8 @@ Notes:
   `DataIntegrityViolationException` into a `409 Conflict`. No cascade delete
   of sessions/participants/answers is configured, intentionally: deleting a
   quizlet should never silently erase someone's play history.
+
+[↑ Back to top](#table-of-contents)
 
 ## Sequence diagrams
 
@@ -192,6 +218,8 @@ sequenceDiagram
     SessAPI-->>Bot: [ParticipantProgressResponse...] per user
 ```
 
+[↑ Back to top](#table-of-contents)
+
 ## Configuration
 
 | Env var             | Default (in `application.yml`)              | Purpose                          |
@@ -210,6 +238,8 @@ and the backend container together; `hibernate.ddl-auto: update` auto-creates
 the schema on startup (no migration tool yet — fine for this stage, worth
 revisiting before this goes anywhere near production data).
 
+[↑ Back to top](#table-of-contents)
+
 ## Deliberate simplifications (skeleton stage)
 
 - No authentication/authorization on the REST API — it's assumed to sit
@@ -222,3 +252,5 @@ revisiting before this goes anywhere near production data).
 - Schema managed by `ddl-auto: update`, not a migration tool (Flyway/Liquibase) —
   acceptable while the schema is still moving; should change before this is
   backed by real user data.
+
+[↑ Back to top](#table-of-contents)

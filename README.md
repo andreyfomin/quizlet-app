@@ -5,6 +5,27 @@ runs them as timed, per-user quiz sessions inside Slack — create a quiz, start
 for a group of teammates, everyone answers in their DMs, everyone's score is
 trackable in the channel.
 
+## Table of Contents
+
+- [Architecture](#architecture)
+  - [Full request/response flow](#full-requestresponse-flow)
+  - [Is this over-engineered for what it does?](#is-this-over-engineered-for-what-it-does)
+  - [Documentation map](#documentation-map)
+- [Project layout](#project-layout)
+- [Prerequisites](#prerequisites)
+- [Step-by-step: deploy locally with Docker and connect it to Slack](#step-by-step-deploy-locally-with-docker-and-connect-it-to-slack)
+  - [1. Configure environment variables](#1-configure-environment-variables)
+  - [2. Start ngrok](#2-start-ngrok)
+  - [3. Create the Slack app](#3-create-the-slack-app)
+  - [4. Install the app and collect credentials](#4-install-the-app-and-collect-credentials)
+  - [5. Build and start everything](#5-build-and-start-everything)
+  - [6. Verify the backend directly (bypassing Slack)](#6-verify-the-backend-directly-bypassing-slack)
+  - [7. Verify the slackbot endpoint is live](#7-verify-the-slackbot-endpoint-is-live)
+  - [8. Test the whole thing from Slack](#8-test-the-whole-thing-from-slack)
+  - [9. Tear down](#9-tear-down)
+- [Restarting later: keep the Slack app URL in sync](#restarting-later-keep-the-slack-app-url-in-sync)
+- [Local development without Docker](#local-development-without-docker)
+
 ## Architecture
 
 Three pieces, each with exactly one job, talking in a straight line:
@@ -21,6 +42,76 @@ flowchart LR
 |---|---|---|
 | **[`slackbot`](slackbot)** | The **server** that receives everything Slack sends (slash commands, button clicks), and the **client** that calls the backend and the Slack Web API. Owns zero quiz state — pure translation layer. | Slack Platform (both directions), `backend` (client only) |
 | **[`backend`](backend)** | The **server** slackbot talks to. Owns all quiz data (Postgres) and is the only thing that calls the AI provider. Has no idea Slack exists. | `slackbot` (server side), Hugging Face (client side), Postgres |
+
+### Full request/response flow
+
+Every module, one continuous journey: creating a quiz, starting it for a
+group, answering questions, and the final score breakdown. (Per-command
+diagrams for `list`/`delete`/`progress`/`help` — each a single fast
+request/response, nothing this involved — are in
+[`slackbot/ARCHITECTURE.md`](slackbot/ARCHITECTURE.md).)
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Slack as Slack Platform
+    participant Bot as slackbot
+    participant API as backend
+    participant HF as Hugging Face
+    participant DB as Postgres
+
+    rect rgb(235, 245, 255)
+    Note over User,DB: Create a quiz
+    User->>Slack: /quiz create Docker Basics
+    Slack->>Bot: slash command (POST /slack/events)
+    Bot-->>Slack: ack "Generating your quiz..." (must return within 3s)
+    Slack-->>User: shows ack
+    Note over Bot: background executor picks up from here
+    Bot->>API: POST /api/quizlets {topic, questionCount}
+    API->>HF: chat completion request (prompt asks for JSON quiz)
+    HF-->>API: generated questions
+    API->>DB: save Quizlet + Questions
+    API-->>Bot: 201 QuizletResponse {id, questions[]}
+    Bot->>Slack: POST response_url — "Created quizlet #12 ..."
+    Slack-->>User: shows follow-up message
+    end
+
+    rect rgb(255, 248, 235)
+    Note over User,DB: Start it for a group
+    User->>Slack: /quiz start 12 @alice @bob
+    Slack->>Bot: slash command
+    Bot-->>Slack: ack "Starting quiz session..."
+    Note over Bot: background executor picks up from here
+    Bot->>API: POST /api/sessions {quizletId, slackUserIds}
+    API->>DB: create QuizSession + one Participant per user
+    API-->>Bot: 201 SessionResponse {id, participants[], currentQuestion}
+    par for each participant
+        Bot->>Slack: conversations.open + chat.postMessage — DM, question 1 as buttons
+    end
+    Bot->>Slack: POST response_url — "Started session #7 ..."
+    Slack-->>User: DM arrives with question 1
+    end
+
+    rect rgb(240, 255, 240)
+    Note over User,DB: Answer questions (repeats per question, per participant)
+    loop until this participant's quiz is complete
+        User->>Slack: clicks an option button
+        Slack->>Bot: block action payload {user, channel, message ts, value}
+        Bot->>API: POST /api/sessions/7/answers {slackUserId, selectedOptionIndex}
+        API->>DB: record Answer, update Participant score/currentQuestionIndex
+        API-->>Bot: AnswerResultResponse {correct, score, nextQuestion}
+        alt more questions remain
+            Bot->>Slack: chat.update — feedback + next question as buttons
+        else that was the last question
+            Bot->>API: GET /api/sessions/7/review/{slackUserId}
+            API->>DB: fetch this participant's Answers (chronological)
+            API-->>Bot: ParticipantReviewResponse {score, totalQuestions, answers[]}
+            Bot->>Slack: chat.update — "Final score: 4/5 correct" + full right/wrong breakdown
+        end
+        Slack-->>User: DM updates in place
+    end
+    end
+```
 
 ### Is this over-engineered for what it does?
 
@@ -66,6 +157,8 @@ this review just didn't find one.
 | [`slackbot/ARCHITECTURE.md`](slackbot/ARCHITECTURE.md) | Slack interaction model, the 3-second-ack pattern, sequence diagrams |
 | [`slackbot/README.md`](slackbot/README.md) | Slackbot-only setup detail and troubleshooting (this file's Slack setup steps are the condensed version) |
 
+[↑ Back to top](#table-of-contents)
+
 ## Project layout
 
 ```
@@ -78,6 +171,8 @@ this review just didn't find one.
 └── slackbot/                        Spring Boot Slack app (Bolt for Java)
     └── src/main/java/com/aiquizlet/slackbot/{config,backend,quiz}
 ```
+
+[↑ Back to top](#table-of-contents)
 
 ## Prerequisites
 
@@ -93,6 +188,8 @@ Java/Gradle are **not** required on your machine beyond what's already vendored 
 `./gradlew` bootstraps its own Gradle version, and Docker builds each service
 with its own JDK. You only need a local JDK if you want to run a service outside
 Docker (see the per-module READMEs).
+
+[↑ Back to top](#table-of-contents)
 
 ## Step-by-step: deploy locally with Docker and connect it to Slack
 
@@ -268,6 +365,8 @@ docker compose down        # stop containers, keep the Postgres volume
 docker compose down -v     # stop containers and delete quiz data too
 ```
 
+[↑ Back to top](#table-of-contents)
+
 ## Restarting later: keep the Slack app URL in sync
 
 Every time ngrok restarts it gets a **new random URL** (free tier), which
@@ -304,9 +403,13 @@ A few things worth knowing about how this works:
 - **This only updates an already-created app.** It can't do the initial
   "Create New App" step — that's still the one-time manifest paste in step 3.
 
+[↑ Back to top](#table-of-contents)
+
 ## Local development without Docker
 
 Each service can run standalone against its own JDK/Gradle for faster
 iteration — see [`backend/ARCHITECTURE.md`](backend/ARCHITECTURE.md) and
 [`slackbot/README.md`](slackbot/README.md) for the `./gradlew bootRun` /
 direct-jar instructions and the full environment variable reference.
+
+[↑ Back to top](#table-of-contents)

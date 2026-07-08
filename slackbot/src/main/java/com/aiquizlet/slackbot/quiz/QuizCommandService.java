@@ -52,25 +52,29 @@ public class QuizCommandService {
         String text = req.getPayload().getText() == null ? "" : req.getPayload().getText().trim();
         String responseUrl = req.getPayload().getResponseUrl();
 
-        if (text.equals("create") || text.startsWith("create ")) {
+        if (isCommand(text, "create")) {
             return handleCreate(afterFirstWord(text), responseUrl, ctx);
         }
-        if (text.equals("start") || text.startsWith("start ")) {
+        if (isCommand(text, "start")) {
             return handleStart(afterFirstWord(text), responseUrl, ctx);
         }
-        if (text.equals("progress") || text.startsWith("progress ")) {
+        if (isCommand(text, "progress")) {
             return handleProgress(afterFirstWord(text), ctx);
         }
         if (text.equals("list")) {
             return handleList(ctx);
         }
-        if (text.equals("delete") || text.startsWith("delete ")) {
+        if (isCommand(text, "delete")) {
             return handleDelete(afterFirstWord(text), ctx);
         }
         if (text.isBlank() || text.equals("help")) {
             return ctx.ack(usage());
         }
         return ctx.ack(":grey_question: Unknown command `" + text + "`.\n\n" + usage());
+    }
+
+    private static boolean isCommand(String text, String command) {
+        return text.equals(command) || text.startsWith(command + " ");
     }
 
     private Response handleCreate(String rest, String responseUrl, SlashCommandContext ctx) {
@@ -111,10 +115,8 @@ public class QuizCommandService {
             return ctx.ack("Usage: `/quiz start <quizletId> @user1 @user2 ...`");
         }
 
-        long quizletId;
-        try {
-            quizletId = Long.parseLong(parts[0]);
-        } catch (NumberFormatException e) {
+        Long quizletId = parseLongOrNull(parts[0]);
+        if (quizletId == null) {
             return ctx.ack(":x: `" + parts[0] + "` is not a valid quizlet id.");
         }
 
@@ -145,10 +147,8 @@ public class QuizCommandService {
         if (rest.isBlank()) {
             return ctx.ack("Usage: `/quiz progress <sessionId>`");
         }
-        long sessionId;
-        try {
-            sessionId = Long.parseLong(rest);
-        } catch (NumberFormatException e) {
+        Long sessionId = parseLongOrNull(rest);
+        if (sessionId == null) {
             return ctx.ack(":x: `" + rest + "` is not a valid session id.");
         }
 
@@ -186,10 +186,8 @@ public class QuizCommandService {
         if (rest.isBlank()) {
             return ctx.ack("Usage: `/quiz delete <quizletId>`");
         }
-        long quizletId;
-        try {
-            quizletId = Long.parseLong(rest);
-        } catch (NumberFormatException e) {
+        Long quizletId = parseLongOrNull(rest);
+        if (quizletId == null) {
             return ctx.ack(":x: `" + rest + "` is not a valid quizlet id.");
         }
 
@@ -218,6 +216,14 @@ public class QuizCommandService {
     private static String afterFirstWord(String text) {
         int space = text.indexOf(' ');
         return space < 0 ? "" : text.substring(space + 1).trim();
+    }
+
+    private static Long parseLongOrNull(String text) {
+        try {
+            return Long.parseLong(text);
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private static String usage() {
